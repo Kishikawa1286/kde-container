@@ -8,6 +8,8 @@ FROM nvidia/cuda:12.3.2-base-ubuntu22.04
 # If a copy of the MPL was not distributed with this file,
 # You can obtain one at https://mozilla.org/MPL/2.0/.
 
+ARG NOVNC_PASSWD password
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # System defaults that should not be changed
@@ -17,24 +19,48 @@ ENV PULSE_SERVER unix:/run/pulse/native
 
 USER root
 
+# apt-fast
+# https://github.com/ilikenwf/apt-fast
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        software-properties-common
+RUN add-apt-repository ppa:apt-fast/stable && \
+    apt-get update && \
+    apt-get -y install apt-fast
+RUN echo debconf apt-fast/maxdownloads string 128 \
+        | debconf-set-selections && \
+    echo debconf apt-fast/dlflag boolean true \
+        | debconf-set-selections && \
+    echo debconf apt-fast/aptmanager string apt-get \
+        | debconf-set-selections
+
+# Set mirror
+# https://apt-mirror-updater.readthedocs.io/en/latest/readme.html
+RUN apt-fast update && \
+    apt-fast install -y --no-install-recommends \
+        python3-pip python3-setuptools python3-wheel
+RUN pip3 install --user apt-mirror-updater
+ENV PATH="/root/.local/bin:${PATH}"
+RUN apt-mirror-updater --max=30 --auto-change-mirror
+
 # Common utils
 # Set non-interactive timezone configuration
 RUN ln -fs /usr/share/zoneinfo/Asia/Tokyo /etc/localtime && \
-    apt-get update && \
-    apt-get install -y tzdata && \
+    apt-fast update && \
+    apt-fast install -y tzdata && \
     dpkg-reconfigure --frontend noninteractive tzdata
 # Install fundamental packages
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-fast update && \
+    apt-fast install -y --no-install-recommends \
         apt-transport-https \
         apt-utils \
         build-essential \
+        curl \
         ca-certificates \
         curl \
         gnupg \
         locales \
         make \
-        software-properties-common \
         wget && \
     rm -rf /var/lib/apt/lists/* && \
     locale-gen en_US.UTF-8
@@ -45,7 +71,8 @@ ENV LC_ALL en_US.UTF-8
 
 # Install operating system libraries or packages
 RUN dpkg --add-architecture i386 && \
-    apt-get update && apt-get install --no-install-recommends -y \
+    apt-fast update && \
+    apt-fast install --no-install-recommends -y \
         alsa-base \
         alsa-utils \
         cups-browsed \
@@ -201,7 +228,7 @@ ENV NVIDIA_DRIVER_CAPABILITIES all
 # Disable VSYNC for NVIDIA GPUs
 ENV __GL_SYNC_TO_VBLANK 0
 
-# Default environment variables (password is "mypasswd")
+# Default environment variables
 ENV TZ UTC
 ENV SIZEW 1920
 ENV SIZEH 1080
@@ -209,7 +236,7 @@ ENV REFRESH 60
 ENV DPI 96
 ENV CDEPTH 24
 ENV VGL_DISPLAY egl
-ENV PASSWD mypasswd
+ENV PASSWD ${NOVNC_PASSWD}
 ENV NOVNC_ENABLE false
 ENV WEBRTC_ENCODER nvh264enc
 ENV WEBRTC_ENABLE_RESIZE false
@@ -220,14 +247,18 @@ ARG VIRTUALGL_VERSION=3.1
 ARG NOVNC_VERSION=1.4.0
 
 # Install Xvfb
-RUN apt-get update && apt-get install --no-install-recommends -y \
+RUN apt-fast update && \
+    apt-fast install -y --no-install-recommends \
         xvfb && \
     rm -rf /var/lib/apt/lists/*
 
 # Install VirtualGL and make libraries available for preload
 RUN curl -fsSL -O "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_amd64.deb" && \
     curl -fsSL -O "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl32_${VIRTUALGL_VERSION}_amd64.deb" && \
-    apt-get update && apt-get install -y --no-install-recommends ./virtualgl_${VIRTUALGL_VERSION}_amd64.deb ./virtualgl32_${VIRTUALGL_VERSION}_amd64.deb && \
+    apt-fast update && \
+    apt-fast install -y --no-install-recommends \
+        ./virtualgl_${VIRTUALGL_VERSION}_amd64.deb \
+        ./virtualgl32_${VIRTUALGL_VERSION}_amd64.deb && \
     rm -f "virtualgl_${VIRTUALGL_VERSION}_amd64.deb" "virtualgl32_${VIRTUALGL_VERSION}_amd64.deb" && \
     rm -rf /var/lib/apt/lists/* && \
     chmod u+s /usr/lib/libvglfaker.so && \
@@ -259,7 +290,8 @@ Pin: version 1:1snap*\n\
 Pin-Priority: -1" > /etc/apt/preferences.d/firefox-nosnap && \
     mkdir -pm755 /etc/apt/trusted.gpg.d && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21" | gpg --dearmor -o /etc/apt/trusted.gpg.d/mozillateam-ubuntu-ppa.gpg && \
     mkdir -pm755 /etc/apt/sources.list.d && echo "deb https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu $(grep UBUNTU_CODENAME= /etc/os-release | cut -d= -f2 | tr -d '\"') main" > "/etc/apt/sources.list.d/mozillateam-ubuntu-ppa-$(grep UBUNTU_CODENAME= /etc/os-release | cut -d= -f2 | tr -d '\"').list" && \
-    apt-get update && apt-get install --no-install-recommends -y \
+    apt-fast update && \
+    apt-fast install -y --no-install-recommends \
         kde-plasma-desktop \
         adwaita-icon-theme-full \
         appmenu-gtk3-module \
@@ -383,7 +415,7 @@ Pin-Priority: -1" > /etc/apt/preferences.d/firefox-nosnap && \
         firefox \
         pavucontrol-qt \
         transmission-qt && \
-    apt-get install --install-recommends -y \
+    apt-fast install -y --install-recommends \
         libreoffice \
         libreoffice-kf5 \
         libreoffice-plasma \
@@ -407,69 +439,115 @@ SingleClick=false\n\
 action/lock_screen=false\n\
 logout=false" > /etc/xdg/kdeglobals
 
+# Install the noVNC web interface and the latest x11vnc for fallback
+RUN apt-fast update && \
+    apt-fast install --no-install-recommends -y \
+        autoconf \
+        automake \
+        autotools-dev \
+        chrpath \
+        debhelper \
+        git \
+        jq \
+        python3 \
+        python3-numpy \
+        libc6-dev \
+        libcairo2-dev \
+        libjpeg-turbo8-dev \
+        libssl-dev \
+        libv4l-dev \
+        libvncserver-dev \
+        libtool-bin \
+        libxdamage-dev \
+        libxinerama-dev \
+        libxrandr-dev \
+        libxss-dev \
+        libxtst-dev \
+        libavahi-client-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Build the latest x11vnc source to avoid various errors
+    git clone "https://github.com/LibVNC/x11vnc.git" /tmp/x11vnc && \
+    cd /tmp/x11vnc && autoreconf -fi && ./configure && make install && cd / && rm -rf /tmp/* && \
+    curl -fsSL "https://github.com/novnc/noVNC/archive/v${NOVNC_VERSION}.tar.gz" | tar -xzf - -C /opt && \
+    mv -f "/opt/noVNC-${NOVNC_VERSION}" /opt/noVNC && \
+    cd /opt/noVNC && ln -snf vnc.html index.html && \
+    # Use the latest Websockify source to expose noVNC
+    git clone "https://github.com/novnc/websockify.git" /opt/noVNC/utils/websockify
+
 # ORIGINAL CODE BELOW
 
-# Create a user
-RUN useradd -m admin
-
-# Give sudo permission to the user "admin"
-RUN apt-get update && apt-get install -y sudo
-RUN echo "admin ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-RUN chown -R admin:admin /home/admin
-
-USER admin
-
-WORKDIR /home/admin
+# Add user named admin
+RUN apt-fast update && apt-fast install -y sudo
+RUN groupadd -g 1000 admin && \
+    useradd -ms /bin/bash admin -u 1000 -g 1000 && \
+    usermod -a -G adm,audio,cdrom,dialout,dip,fax,floppy,input,lp,lpadmin,plugdev,pulse-access,ssl-cert,sudo,tape,tty,video,voice admin && \
+    echo "admin ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
+    chown -R admin:admin /home/admin && \
+    ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime && echo "$TZ" > /etc/timezone
 
 # Docker
 # https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository
-RUN sudo install -m 0755 -d /etc/apt/keyrings && \
-    sudo wget -O /etc/apt/keyrings/docker.asc \
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/docker.asc \
         https://download.docker.com/linux/ubuntu/gpg && \
     echo "deb \
         [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
         https://download.docker.com/linux/ubuntu \
         $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && \
-    sudo apt-get update && \
-    sudo apt-get install -y \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-fast update && \
+    apt-fast install -y \
         docker-ce \
         docker-ce-cli \
         containerd.io \
         docker-buildx-plugin \
         docker-compose-plugin && \
     # https://docs.docker.com/engine/install/linux-postinstall/
-    sudo usermod -aG docker admin
+    usermod -aG docker admin
 
 # VS Code
 # https://code.visualstudio.com/docs/setup/linux
-RUN sudo wget -qO- https://packages.microsoft.com/keys/microsoft.asc | \
-        sudo gpg --dearmor > packages.microsoft.gpg && \
-    sudo install -D -o root -g root -m 644 packages.microsoft.gpg \
+RUN wget -qO- https://packages.microsoft.com/keys/microsoft.asc | \
+        gpg --dearmor > packages.microsoft.gpg && \
+    install -D -o root -g root -m 644 packages.microsoft.gpg \
         /etc/apt/keyrings/packages.microsoft.gpg && \
-    sudo sh -c 'echo "deb \
+    sh -c 'echo "deb \
         [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
         https://packages.microsoft.com/repos/code stable main" > \
         /etc/apt/sources.list.d/vscode.list' && \
     rm -f packages.microsoft.gpg && \
-    sudo apt-get update && \
-    sudo apt-get install -y code
+    apt-fast update && \
+    apt-fast install -y code
 
 # Google Chrome
 # https://zenn.dev/shimtom/articles/55fd2eb3d55c48
-RUN sudo wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | \
-    sudo gpg --dearmour -o /usr/share/keyrings/google-keyring.gpg && \
-    sudo sh -c 'echo "deb \
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | \
+    gpg --dearmour -o /usr/share/keyrings/google-keyring.gpg && \
+    sh -c 'echo "deb \
         [arch=amd64 signed-by=/usr/share/keyrings/google-keyring.gpg] \
         http://dl.google.com/linux/chrome/deb/ stable main" >> \
         /etc/apt/sources.list.d/google-chrome.list' && \
-    sudo apt-get update && \
-    sudo apt-get install -y google-chrome-stable
+    apt-fast update && \
+    apt-fast install -y google-chrome-stable
 
 # Chrome Remote Desktop
-RUN sudo wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb && \
-    sudo DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y ./chrome-remote-desktop_current_amd64.deb && \
+RUN wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb && \
+    apt-fast install -y ./chrome-remote-desktop_current_amd64.deb && \
     rm -f chrome-remote-desktop_current_amd64.deb
 
-CMD ["tail", "-f", "/dev/null"]
+# Copy scripts and configurations used to start the container
+COPY entrypoint.sh /etc/entrypoint.sh
+RUN chmod 755 /etc/entrypoint.sh
+COPY selkies-gstreamer-entrypoint.sh /etc/selkies-gstreamer-entrypoint.sh
+RUN chmod 755 /etc/selkies-gstreamer-entrypoint.sh
+COPY supervisord.conf /etc/supervisord.conf
+RUN chmod 755 /etc/supervisord.conf
+
+EXPOSE 8080
+
+USER 1000
+ENV SHELL /bin/bash
+ENV USER admin
+WORKDIR /home/admin
+
+ENTRYPOINT ["/usr/bin/supervisord"]
